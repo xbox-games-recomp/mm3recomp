@@ -56,7 +56,9 @@ The output is `build\Release\mm3_recomp.exe`; `mm3_launcher.exe` is copied to th
 
 ## Running
 
-`mm3_launcher.exe` sets resolution, FXAA, vsync, keyboard, rumble and logging, saves them to
+`mm3_launcher.exe` sets window size, fullscreen (Alt+Enter switches), resolution scale, anti-aliasing (FXAA / FXAA extreme),
+scaling to the window (bilinear / CAS / FSR 1), anisotropic filtering, vsync, title-bar stats, keyboard, rumble
+and logging (the same Display, Graphics and Controls pages as the other ports), saves them to
 `launcher.user.ini` and logs to `run.log`; `--play` skips the window. The required environment variables are
 in `launcher.ini`. Useful extras for the *Extra environment* box:
 
@@ -67,8 +69,9 @@ in `launcher.ini`. Useful extras for the *Extra environment* box:
 | `RECOMP_D3D11_STRETCH=1` | Fill the window instead of keeping 4:3 |
 | `RECOMP_D3D11_HITCH=<ms>` | Log every frame slower than this |
 
-**Controls:** the first XInput pad maps 1:1 to the Xbox pad. Keyboard: WASD steer, IJKL right stick, arrows
-D-pad, Z/X/C/V = A/B/X/Y, Q/E = White/Black, 1/3 = brake/gas, Enter = Start, Backspace = Back.
+**Controls:** the first XInput pad maps 1:1 to the Xbox pad. Keyboard (on by default): arrows = D-pad, Enter = Start, Backspace = Back, Z/X/C/V = A/B/X/Y,
+Q/E = White/Black, 1/3 = triggers, WASD = left stick, IJKL = right stick, Shift/Ctrl = stick clicks; the same
+layout as every xbox-games-recomp port. Driving: WASD steer, 1/3 = brake/gas.
 
 ## How it works
 
