@@ -354,6 +354,32 @@ void sub_00361E7B(void)
 }
 
 /*
+ * Widescreen (RECOMP_WIDESCREEN=1), called on entry to sub_000F4AC3, the camera's
+ * SetPerspective(fov, aspect, near, far) (stdcall; camera in esi). Both game cameras
+ * pass aspect 4/3 ([0x385F20]); MM3 never reads the console's widescreen flag. 16/9
+ * keeps the vertical field of view and widens the horizontal one; the same call builds
+ * the frustum planes (sub_000F3F93), so culling widens with it. The scene then lands
+ * anamorphic in the 640x480 surfaces, as PGR2's and RSC2's native 16:9 does, and the
+ * back end shows it at 16:9 and narrows the 2D overlays back to their shape.
+ * Patched in by scripts/patch_gen.py; NOTES.md 38.
+ */
+void mm3_ws_projection(void)
+{
+    static int on = -1;
+    float a;
+
+    if (on < 0) {
+        const char *e = getenv("RECOMP_WIDESCREEN");
+        on = e && atoi(e) != 0;
+    }
+    if (!on)
+        return;
+    a = MEMF(g_esp + 8);                     /* [esp] return, [esp+4] fov, [esp+8] aspect */
+    if (a > 1.32f && a < 1.34f)
+        MEMF(g_esp + 8) = a * (16.0f / 9.0f) / (4.0f / 3.0f);
+}
+
+/*
  * XNet startup/status wrapper (0x002AF497): stdcall, 1 arg, ret 4.
  *
  * The game's network check (sub_00195341) calls this, then polls an async

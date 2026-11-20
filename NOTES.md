@@ -559,6 +559,38 @@ Snapshots: `snapshots\mm3_recomp_world.exe(.pdb)` with `config\seed_functions.wo
       the client area 4:3 (`keep_aspect`; maximised/snapped windows are letterboxed by `picture_rect`),
       and WM_SIZE re-presents the last frame at once (`repaint_now`). `RECOMP_D3D11_STRETCH=1` = old.
 
+38. **Widescreen: hor+ 3D, 4:3-shaped overlays (`RECOMP_WIDESCREEN=1`, launcher Aspect ratio; 2026-11-19, runs `ws1`-`ws8`, `r43`).**
+    The toolkit told every title it was on a 4:3 TV. XAPI's `XGetVideoFlags` returns
+    `(XC_VIDEO >> 16) & 0x5F` (the EEPROM keeps the dashboard's video settings in the high word), and
+    `ExQueryNonVolatileSetting(XC_VIDEO)` answered 0x3, which reads back as 0. With `RECOMP_WIDESCREEN=1` it
+    now answers 0x00010000 (widescreen), and `AvSendTVEncoderOption` option 6 -- the real kernel's
+    AV_QUERY_AV_CAPABILITIES, which carries the same user flags -- adds the bit too: D3D matches its display-mode
+    rows against that answer, and without it CreateDevice fails and the title reboots (PGR2 did exactly that).
+    Both in `kernel_xbox.c` / `kernel_hal.c` (patches/xboxrecomp.patch); unset = the old 4:3 behaviour.
+    
+    The launcher's Display > Aspect ratio now passes `RECOMP_ASPECT` (schema/xbox.ini); `main.c` turns
+    anything but `4_3` into `RECOMP_WIDESCREEN=1` before the title starts. `d3d11_present_fx.c` gains
+    `pfx_widescreen()` / `pfx_aspect()`, and the back end's window sizing (`keep_aspect`, the default size) and
+    `picture_rect` use that aspect, so the 640x480 surface is shown at 16:9.
+    - MM3, unlike PGR2 and RSC2, never reads the widescreen flag (its only `XGetVideoFlags` use is PAL60).
+      Both cameras call `sub_000F4AC3(fov, aspect, near, far)` (camera in esi) with aspect 4/3
+      (`[0x385F20]`); it builds the projection and the frustum planes (`sub_000F3F93`). `patch_gen.py`
+      puts a call to `mm3_ws_projection` (recomp_manual.c) at its top, which turns 4/3 into 16/9: the same
+      vertical view, wider sideways, culling widened with it. The scene lands anamorphic in the 640x480
+      surfaces, as PGR2's and RSC2's native mode does. In-engine story scenes are 16:9 the same way.
+    - 2D: the HUD, text and menus come through four vertex programmes that take screen positions from v0:
+      `75C98FE4`/`5DEB9A41` (sprites, text: `oPos.xy = v0.xy * R0.x`, R0.x = 2 v0.w then three times
+      R0 = R0^2 + R0), `D3320CDA` (D3D's XYZRHW pass-through), `969115CF` (full-screen passes).
+      `ws_2d_scale` (d3d11_backend.c) works out each such batch's x extent on the CPU and, in a 640-wide
+      surface, narrows it to 3/4 around the centre (`ws` in the VD constant buffer, applied after the
+      screen-to-clip step) unless it reaches both edges: backdrops, the pause-menu dim, the glow/haze/colour
+      passes and the front-end menu art still fill 16:9. So the HUD keeps its shape inside the 4:3 centre
+      and the front-end backgrounds are stretched under correctly shaped buttons. `RECOMP_WIDESCREEN_HUD=0`
+      leaves overlays stretched; `RECOMP_WS_LOG=1` prints the first 400 classified batches.
+    - The Bink movies (PVIDEO overlay) and the CPU-drawn loading screen (display memory) stay 4:3,
+      pillarboxed (`present_frame` picks the 4:3 picture for them). Verified: intro movies (`frames\ws8`,
+      window captures), title, main menu, Work Undercover menu, story scene, Paris race + pause menu
+      (`frames\ws5`); 4:3 runs unchanged (`frames\r43`). Not checked: Washington, multiplayer split screen.
 ## Open issues (2026-10-23, D3D11 back end)
 
 First pass done 2026-10-23 (runs `inv2`, `drv1`, `drv2`; driving script in that session's scratchpad: verify_ps.ps1

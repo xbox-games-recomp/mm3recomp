@@ -24,6 +24,13 @@ PATCHES=[
  # edx is unchanged since the cmp. See NOTES.md 37.
  ("loc_003418AF: ;\n    if (_flags /* jne: not equal / not zero */) { g_seh_ebp = ebp; sub_003418DC(); return; }\n",
   "loc_003418AF: ;\n    if (edx != 0xC) { g_seh_ebp = ebp; sub_003418DC(); return; } /* mm3recomp patch: flags of the cmp in sub_00341880 (see patch_gen.py) */\n"),
+ # Widescreen (sub_000F4AC3, the camera's SetPerspective(fov, aspect, near, far)): MM3 never
+ # reads the console's widescreen setting and passes aspect 4/3. With RECOMP_WIDESCREEN=1,
+ # mm3_ws_projection (recomp_manual.c) turns that into 16/9 before the matrix and the
+ # frustum planes are built: the same vertical view, wider sideways, drawn anamorphic into
+ # the 640x480 surfaces and shown at 16:9 by the back end. See NOTES.md 38.
+ ("loc_000F4AC3: ;\n    PUSH32(esp, ebp);\n",
+  "loc_000F4AC3: ;\n    { extern void mm3_ws_projection(void); mm3_ws_projection(); } /* mm3recomp patch: widescreen (see patch_gen.py) */\n    PUSH32(esp, ebp);\n"),
 ]
 files=sorted(glob.glob(GEN+'recomp_*.c'))
 ok=True

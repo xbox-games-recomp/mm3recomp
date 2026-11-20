@@ -16,7 +16,8 @@ Built on [xboxrecomp](https://github.com/sp00nznet/xboxrecomp) v0.15.0 (MIT, git
 > (generated C, builds, dumps) is git-ignored.
 
 **Status: about 80 % done.** Intro movies, menus and full races (Paris, Washington) with audio, gamepad and
-rumble, ~40–50 fps at 2× internal resolution, resizable 4:3 window.
+rumble, ~40–50 fps at 2× internal resolution, resizable window, 16:9 widescreen (wider view in the
+city, HUD and menus kept in shape; the movies stay 4:3).
 
 ## Quick start
 
@@ -58,17 +59,19 @@ The output is `build\Release\mm3_recomp.exe`; `mm3_launcher.exe` is copied to th
 
 ## Running
 
-`mm3_launcher.exe` sets window size, fullscreen (Alt+Enter switches), resolution scale, anti-aliasing (FXAA / FXAA extreme),
+`mm3_launcher.exe` sets aspect ratio (anything but 4:3 plays in widescreen), window size, fullscreen (Alt+Enter switches), resolution scale, anti-aliasing (FXAA / FXAA extreme),
 scaling to the window (bilinear / CAS / FSR 1), anisotropic filtering, vsync, title-bar stats, keyboard, rumble
 and logging (the same Display, Graphics and Controls pages as the other ports), saves them to
-`launcher.user.ini` and logs to `run.log`; `--play` skips the window. The required environment variables are
-in `launcher.ini`. Useful extras for the *Extra environment* box:
+`launcher.user.ini` and logs to `run.log` (the run before is kept as `run.prev.log`); `--play` skips the
+window. Only one launcher window opens (starting it again brings that window to the front), and Play does
+nothing while the game is already running. The required environment variables are in `launcher.ini`. Useful extras for the *Extra environment* box:
 
 | Variable | Effect |
 |---|---|
 | `RECOMP_D3D11_RES=<n>` | Internal resolution n × 640×480 (default 2, max 6), averaged down to the window |
 | `RECOMP_D3D11_SCALE=<f>` | Initial window size f × 640×480 (default 1.5) |
-| `RECOMP_D3D11_STRETCH=1` | Fill the window instead of keeping 4:3 |
+| `RECOMP_D3D11_STRETCH=1` | Fill the window instead of keeping 4:3 (or 16:9) |
+| `RECOMP_WIDESCREEN=1` | 16:9 widescreen (what the launcher's non-4:3 aspect ratios set); NOTES 38 |
 | `RECOMP_D3D11_HITCH=<ms>` | Log every frame slower than this |
 
 **Controls:** the first XInput pad maps 1:1 to the Xbox pad. Keyboard (on by default): arrows = D-pad, Enter = Start, Backspace = Back, Z/X/C/V = A/B/X/Y,
@@ -98,6 +101,7 @@ anything.
 2. The colour-grade pass is missing in about 1 frame in 300.
 3. 44 recompiled functions read flags set by their caller; one was patched, the rest are unchecked.
 4. No MSAA (supersampling instead); no Xbox Live / System Link.
+5. Widescreen is not yet checked in Washington or in split screen (NOTES 38).
 
 ## Legal
 

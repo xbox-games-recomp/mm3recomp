@@ -533,7 +533,7 @@ static void note(const char *what, HRESULT hr)
 static int stretch_mode(void);
 static void repaint_now(void);
 
-/* WM_SIZING: keep the client area 4:3 while the user drags an edge or corner, so
+/* WM_SIZING: keep the client area 4:3 (16:9 with RECOMP_WIDESCREEN) while the user drags an edge or corner, so
  * the window never shows the picture stretched (DWM scales the last frame to the
  * window until the next present). Maximised or snapped windows are letterboxed by
  * picture_rect instead. */
@@ -541,6 +541,7 @@ static void keep_aspect(HWND h, WPARAM edge, RECT *wr)
 {
     RECT fr = { 0, 0, 0, 0 };
     LONG cw, ch, fw, fh;
+    LONG an = pfx_widescreen() ? 16 : 4, ad = pfx_widescreen() ? 9 : 3;   /* aspect an:ad */
 
     AdjustWindowRect(&fr, (DWORD)GetWindowLongA(h, GWL_STYLE), FALSE);
     fw = fr.right - fr.left;
@@ -549,13 +550,13 @@ static void keep_aspect(HWND h, WPARAM edge, RECT *wr)
     ch = (wr->bottom - wr->top) - fh;
     if (cw < 160) cw = 160;
     if (edge == WMSZ_LEFT || edge == WMSZ_RIGHT) {
-        ch = cw * 3 / 4;                     /* width leads, height follows */
+        ch = cw * ad / an;                   /* width leads, height follows */
     } else if (edge == WMSZ_TOP || edge == WMSZ_BOTTOM) {
-        cw = ch * 4 / 3;
-    } else if (cw * 3 > ch * 4) {            /* corner: the larger change leads */
-        ch = cw * 3 / 4;
+        cw = ch * an / ad;
+    } else if (cw * ad > ch * an) {          /* corner: the larger change leads */
+        ch = cw * ad / an;
     } else {
-        cw = ch * 4 / 3;
+        cw = ch * an / ad;
     }
     if (edge == WMSZ_LEFT || edge == WMSZ_TOPLEFT || edge == WMSZ_BOTTOMLEFT)
         wr->left = wr->right - (cw + fw);
@@ -637,7 +638,7 @@ static int create_window(void)
     float scale = sc ? (float)atof(sc) : 1.5f;
 
     if (scale < 0.25f) scale = 1.5f;
-    pfx_window_size(&s_win_w, &s_win_h, (uint32_t)(640 * scale), (uint32_t)(480 * scale));
+    pfx_window_size(&s_win_w, &s_win_h, (uint32_t)(480 * pfx_aspect() * scale + 0.5f), (uint32_t)(480 * scale));
     memset(&wc, 0, sizeof wc);
     wc.lpfnWndProc = wndproc;
     wc.hInstance = GetModuleHandleA(NULL);
@@ -1779,6 +1780,7 @@ typedef struct {
     uint32_t slot[16];                  /* uint4 slotmap[4] */
     uint32_t vbase, vstride, fog_en, fog_mode;
     float fogp[2], aa[2];
+    float ws[4];                        /* ndc.x = ndc.x * ws[0] + ws[1] (widescreen 2D) */
 } VshDrawCB;
 
 /* state: 0 compiling (the executor runs the program on the CPU meanwhile), 1 ready, 2 failed. */
@@ -1878,7 +1880,7 @@ static char *vsh_generate(const uint32_t (*prog)[4], uint32_t len)
         "};\n"
         "cbuffer VC : register(b3) { float4 c[192]; };\n"
         "cbuffer VD : register(b4) { float4 imm[16]; uint4 slotmap[4]; uint vbase; uint vstride; uint fog_en; uint fog_mode;"
-        " float2 fogp; float2 aa; };\n"
+        " float2 fogp; float2 aa; float4 ws; };\n"
         "StructuredBuffer<float4> attrs : register(t9);\n"
         "struct VSOut { float4 pos : SV_Position; float4 d0 : COLOR0; float4 d1 : COLOR1; float fog : TEXCOORD8;\n"
         "               float4 t0 : TEXCOORD0; float4 t1 : TEXCOORD1; float4 t2 : TEXCOORD2; float4 t3 : TEXCOORD3; };\n"
@@ -1999,11 +2001,67 @@ static char *vsh_generate(const uint32_t (*prog)[4], uint32_t len)
         "  if (asuint(oPos.w) == 0u) oPos.w = 1.0;\n"
         "  float w = oPos.w;\n"
         "  float2 ndc = float2(oPos.x * aa.x * inv_half.x - 1.0, 1.0 - oPos.y * aa.y * inv_half.y);\n"
+        "  ndc.x = ndc.x * ws.x + ws.y;\n"
         "  float zn = oPos.z * zscale;\n"
         "  o.pos = float4(ndc * w, zn * w, w);\n"
         "  return o;\n"
         "}\n");
     return s.p;
+}
+
+/* Widescreen 2D (RECOMP_WIDESCREEN=1). mm3_ws_projection (recomp_manual.c) widens the
+ * cameras, so the 3D scene lands anamorphic in the 640x480 surfaces and is shown at 16:9;
+ * the overlays MM3 draws in screen pixels (HUD, text, menus) would come out a third too
+ * wide. These vertex programmes take their position from v0 in screen pixels:
+ *   75C98FE4, 5DEB9A41  HUD sprites and text (oPos.xy = v0.xy * R0)
+ *   D3320CDA            D3D's pre-transformed (XYZRHW) pass-through
+ *   969115CF            full-screen passes (glow, haze; oPos = R2 + c[1])
+ * A batch of theirs in a 640-wide surface is narrowed to 3/4 around the centre, back to
+ * its 4:3 shape -- unless it reaches both edges: a full-screen quad (backdrop, glow and
+ * colour passes, the loading screen) still fills the 16:9 picture.
+ * RECOMP_WIDESCREEN_HUD=0: overlays stretched (no narrowing). */
+static void ws_2d_scale(const Nv2aSurface *s, const Nv2aVshBatch *v, float *ws)
+{
+    static int on = -1;
+    uint32_t i, lw, sl;
+    float mn = 1e30f, mx = -1e30f;
+
+    ws[0] = 1.0f; ws[1] = 0.0f; ws[2] = ws[3] = 0.0f;
+    if (on < 0) {
+        const char *e = getenv("RECOMP_WIDESCREEN_HUD");
+        on = pfx_widescreen() && !(e && atoi(e) == 0);
+    }
+    if (!on || !v->attrs || (v->hash != 0x75C98FE4u && v->hash != 0x5DEB9A41u &&
+                            v->hash != 0xD3320CDAu && v->hash != 0x969115CFu))
+        return;
+    lw = s->width / (s->aa_sx ? s->aa_sx : 1);
+    if (lw != 640 || (sl = v->slot[0]) == 0xFFu)
+        return;
+    for (i = 0; i < v->nverts; i++) {
+        const float *p = v->attrs[i * v->stride + sl];
+        float x = p[0];
+        if (v->hash == 0x75C98FE4u || v->hash == 0x5DEB9A41u) {
+            /* oPos.x = v0.x * R0.x, R0.x = 2 v0.w then three times R0 = R0 * R0 + R0 */
+            float r = 2.0f * p[3];
+            r = r * r + r; r = r * r + r; r = r * r + r;
+            x *= r;
+        }
+        x *= v->aa[0];                      /* programme pixels -> surface pixels */
+        if (x < mn) mn = x;
+        if (x > mx) mx = x;
+    }
+    {
+        static int lg = -1, n;
+        if (lg < 0) lg = getenv("RECOMP_WS_LOG") != NULL;
+        if (lg && n < 400) {
+            n++;
+            fprintf(stderr, "[WS] vsh %08X verts %u x %g..%g slot0 %u stride %u v0 %g %g %g %g\n", v->hash, v->nverts, mn, mx,
+                    sl, v->stride, v->attrs[sl][0], v->attrs[sl][1], v->attrs[sl][2], v->attrs[sl][3]);
+        }
+    }
+    if (mn <= 0.01f * (float)s->width && mx >= 0.99f * (float)s->width)
+        return;                             /* edge to edge: fill the picture */
+    ws[0] = 0.75f;
 }
 
 static int vsh_buffers(void)
@@ -2244,7 +2302,7 @@ static int be_vsh_gpu(const uint32_t (*prog)[4], uint32_t len, uint32_t hash)
 
 /* Upload a vsh batch's attributes, indices and constants and bind its vertex
  * shader. *first_index is where its indices start; 0 if it does not fit. */
-static int vsh_upload(const Nv2aVshBatch *v, UINT *first_index)
+static int vsh_upload(const Nv2aSurface *s, const Nv2aVshBatch *v, UINT *first_index)
 {
     D3D11_MAPPED_SUBRESOURCE m;
     uint32_t abytes = v->nverts * v->stride * 16u, ibytes = v->nindices * 4u, k;
@@ -2291,6 +2349,7 @@ static int vsh_upload(const Nv2aVshBatch *v, UINT *first_index)
     cb.fog_mode = v->fog_mode;
     cb.fogp[0] = v->fog_param[0]; cb.fogp[1] = v->fog_param[1];
     cb.aa[0] = v->aa[0]; cb.aa[1] = v->aa[1];
+    ws_2d_scale(s, v, cb.ws);
     if (FAILED(ID3D11DeviceContext_Map(s_ctx, (ID3D11Resource *)s_vd_buf, 0, D3D11_MAP_WRITE_DISCARD, 0, &m)))
         return 0;
     memcpy(m.pData, &cb, sizeof cb);
@@ -2794,7 +2853,7 @@ vertices_ready:
             bound[st] = srvs[st] ? srvs[st] : s_white_srv;
         ID3D11DeviceContext_IASetPrimitiveTopology(s_ctx, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         if (x->vsh) {
-            if (!vsh_upload(x->vsh, &first)) { s_batches_dropped++; return; }
+            if (!vsh_upload(s, x->vsh, &first)) { s_batches_dropped++; return; }
         } else {
             ID3D11DeviceContext_IASetVertexBuffers(s_ctx, 0, 1, &s_vb, &stride, &off);
             ID3D11DeviceContext_IASetInputLayout(s_ctx, s_layout);
@@ -3403,14 +3462,14 @@ static int stretch_mode(void)
     return stretch;
 }
 
-/* The window rectangle the 4:3 picture goes in: letterboxed or pillarboxed, or the
- * whole window with RECOMP_D3D11_STRETCH=1. */
-static void picture_rect(D3D11_VIEWPORT *vp)
+/* The window rectangle a picture of aspect `a` goes in (4:3; 16:9 with RECOMP_WIDESCREEN):
+ * letterboxed or pillarboxed, or the whole window with RECOMP_D3D11_STRETCH=1. */
+static void picture_rect(D3D11_VIEWPORT *vp, float a)
 {
     float w = (float)s_win_w, h = (float)s_win_h;
     if (!stretch_mode()) {
-        if (w * 3.0f > h * 4.0f) w = floorf(h * 4.0f / 3.0f + 0.5f);
-        else h = floorf(w * 3.0f / 4.0f + 0.5f);
+        if (w > h * a) w = floorf(h * a + 0.5f);
+        else h = floorf(w / a + 0.5f);
     }
     vp->TopLeftX = floorf(((float)s_win_w - w) * 0.5f);
     vp->TopLeftY = floorf(((float)s_win_h - h) * 0.5f);
@@ -3441,7 +3500,10 @@ static void present_frame(RT *r)
     cb.on[1] = r && r->srv;
     if (!cb.on[1] && !cb.on[0])
         return;
-    picture_rect(&pic);
+    /* Widescreen: the Bink movies (the PVIDEO overlay) and the CPU-drawn loading screen
+     * (display memory) were made for 4:3 and stay 4:3, pillarboxed; the game's own
+     * drawing is 16:9 (mm3_ws_projection, ws_2d_scale). */
+    picture_rect(&pic, cb.on[0] || r == &s_mem_rt ? 4.0f / 3.0f : pfx_aspect());
     if (cb.on[1]) {
         D3D11_TEXTURE2D_DESC td;
         ID3D11Texture2D_GetDesc(r->tex, &td);
